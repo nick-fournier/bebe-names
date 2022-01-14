@@ -1,5 +1,5 @@
 import pandas as pd
-import seaborn as sb
+import seaborn as sns
 import matplotlib.pyplot as plt
 import wget
 import sys
@@ -20,6 +20,7 @@ class BebeNames:
         self.nameszip = 'names.zip'
 
         self.download()
+        self.popularity()
 
     def download(self, file = "names.zip"):
         zipdir = self.databasedir + self.nameszip
@@ -52,7 +53,7 @@ class BebeNames:
 
         self.names = names
 
-    def popularity(self, sex = 'M'):
+    def popularity(self, sex = 'M', scale='minmax'):
         # Filter by sex
         namesdf = self.names[self.names.sex == sex].copy()
 
@@ -60,21 +61,75 @@ class BebeNames:
         #namesdf['decade'] = namesdf['year'].apply(lambda x: str(10*round(x/10)) + '-' + str(10*round(x/10) + 9))
         #namesdf = namesdf.groupby(['name', 'sex', 'decade'])['count'].sum('count').reset_index()
 
+        def minmax(x):
+            return 100*(x - x.min()) / (x.max() - x.min())
+
+        def zscore(x):
+            return (x - x.mean()) / x.std()
+
         # Normalize by decade
-        namesdf['normal'] = namesdf.groupby('year')['count'].transform(lambda x: (x - x.mean()) / x.std())
-        namesdf = namesdf.reset_index()
+        if scale == 'minmax':
+            namesdf['normal'] = namesdf.groupby('year')['count'].transform(lambda x: minmax(x))
+        elif scale == 'zscore':
+            namesdf['normal'] = namesdf.groupby('year')['count'].transform(lambda x: zscore(x))
+        else:
+            raise ValueError('Invalid scaling type, must be "minmax" or "zscore".')
+
+        namesdf = namesdf.reset_index(drop=True)
+
+        self.names = namesdf
+
+    def get_quartiles(self):
+        namesum = self.names[['name', 'count', 'normal']].groupby('name').sum('normal').reset_index()
+
+        # Appear more than 1000 times
+        sns.histplot(data=namesum[namesum['count']>1000], x="normal", bins=100)
+
+        namesum[namesum['count'] > 1000].sort_values('normal', ascending=False).head(10)
+        # namesum['normal'].quantile([0, 0.25, 0.5, 0.75, 0.90])
+        namesum[namesum['normal'] >= namesum['normal'].quantile(0.90)]
+
+
+    def get_notrecent(self, last_n_years = 40, percentile = 0.90):
+
+        since_year = datetime.today().year - last_n_years
+        namesdf = self.names
+        perc_name = str(round(100 * percentile)) + 'th'
+
+        #Get nth percentile
+        namesdf[perc_name] = namesdf.groupby('year')['normal'].transform(lambda x: x.quantile(percentile))
+        namesdf = namesdf[namesdf['normal'] >= namesdf[perc_name]]
+
+        # Get most popular names in last X years
+        recent_names = namesdf[(namesdf.year > since_year) & (namesdf.year < datetime.today().year)].name.unique()
+
+        # Remove recent popular names from previously popular names
+        namesdf = namesdf[~namesdf['name'].isin(recent_names)]
+        namesdf = namesdf.reset_index(drop=True)
+
+        sns.set_palette(sns.color_palette("Paired"))
+        fig, ax = plt.subplots(figsize=[15, 5])
+        sns.pointplot(data=namesdf.groupby('year').head(10), x='year', y='normal', hue='name', scale=0.25)
+        new_ticks = [i.get_text() for i in ax.get_xticklabels()]
+        plt.xticks(range(0, len(new_ticks), 10), new_ticks[::10], rotation=30)
+        box = ax.get_position()
+        ax.set_position([box.x0, box.y0, box.width * 0.7, box.height])  # resize position
+        ax.legend(loc='center right', bbox_to_anchor=(1.55, 0.5), ncol=3, markerscale=6, fontsize=8)
+
+        # Get most popular year for each name
+        namesdf = namesdf.loc[namesdf.groupby("name")['normal'].idxmax().values]
+        namesdf.to_excel(r'.\names.xlsx', sheet_name='most popular by year', index = False)
+
+
+
 
 
     def misc(self):
-        #dates = {'start': datetime.today().year - 30, 'end': datetime.today().year}
-        #namesdf = namesdf[(namesdf.year > dates['start']) & (namesdf.year < dates['end'])]
-
-
         # topnames = namesdf.sort_values('count', ascending=False).groupby('year')[['name','year','count','normal']].head(10)
         # topnames = topnames.sort_values('year')
 
         # g = sb.pointplot(data=topnames, x="year", y="normal", hue='name', scale=0.25, aspect=2)
-        # sb.set_palette(sb.color_palette("Paired"))
+        # sns.set_palette(sb.color_palette("Paired"))
         # box = g.get_position()
         # g.set_position([box.x0, box.y0, box.width * 0.85, box.height])  # resize position
         # new_ticks = [i.get_text() for i in g.get_xticklabels()]
